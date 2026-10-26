@@ -524,9 +524,7 @@ impl canvas::Program<Message> for CanvasMeasure {
             {
                 let cursor_position = cursor.position_in(bounds).unwrap();
                 let beat_id = self.beat_at_x(cursor_position.x, bounds.width);
-                let press_position = cursor
-                    .position()
-                    .expect("cursor inside measure bounds");
+                let press_position = cursor.position().expect("cursor inside measure bounds");
                 *state = MeasureInteraction::Clicked;
                 return Some(Action::publish(Message::SelectionDragStart(
                     self.measure_id,
@@ -1325,10 +1323,7 @@ fn draw_selection_fill(
     const BOX_SIDE: f32 = 8.0;
     let top = focus_box_top(rows, measure_start_y);
     let bottom = rows.staff_footer - CANVAS_MARGIN;
-    let top_left = Point::new(
-        measure_start_x + BOX_SIDE,
-        measure_start_y - top,
-    );
+    let top_left = Point::new(measure_start_x + BOX_SIDE, measure_start_y - top);
     let rectangle_size = Size::new(
         total_measure_len - BOX_SIDE * 2.0,
         vertical_measure_height + top + bottom,

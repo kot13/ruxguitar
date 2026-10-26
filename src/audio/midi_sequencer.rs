@@ -53,9 +53,7 @@ impl MidiSequencer {
     }
 
     pub fn last_event_tick(&self) -> u32 {
-        self.sorted_events
-            .last()
-            .map_or(0, |event| event.tick)
+        self.sorted_events.last().map_or(0, |event| event.tick)
     }
 
     pub fn get_next_events(&self) -> Option<&[MidiEvent]> {

@@ -513,13 +513,10 @@ impl RuxApplication {
                                     // apply persistent playback preferences
                                     audio_player.set_metronome(self.metronome_enabled);
                                     audio_player.set_count_in(self.count_in_enabled);
-                                    audio_player
-                                        .set_master_volume(self.saved_master_volume);
+                                    audio_player.set_master_volume(self.saved_master_volume);
                                     self.audio_player = Some(audio_player);
-                                    self.current_tab_path = self
-                                        .opening_tab_path
-                                        .take()
-                                        .or(Some(tab_path));
+                                    self.current_tab_path =
+                                        self.opening_tab_path.take().or(Some(tab_path));
                                     self.persist_session();
                                     Task::batch([
                                         scroll_to(
