@@ -652,14 +652,12 @@ impl RuxApplication {
                 }
                 if let Some(audio_player) = &mut self.audio_player {
                     let was_playing = audio_player.is_playing();
-                    if !was_playing {
-                        if let Some(tablature) = &self.tablature {
-                            if let Some((start, end)) = tablature.selection_range() {
-                                audio_player.set_measure_loop(start, end);
-                                audio_player.focus_measure_at(start, 0);
-                            } else {
-                                audio_player.clear_measure_loop();
-                            }
+                    if !was_playing && let Some(tablature) = &self.tablature {
+                        if let Some((start, end)) = tablature.selection_range() {
+                            audio_player.set_measure_loop(start, end);
+                            audio_player.focus_measure_at(start, 0);
+                        } else {
+                            audio_player.clear_measure_loop();
                         }
                     }
                     if let Some(err) = audio_player.toggle_play() {
