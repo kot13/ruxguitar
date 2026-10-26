@@ -52,6 +52,12 @@ impl MidiSequencer {
         self.last_tick
     }
 
+    pub fn last_event_tick(&self) -> u32 {
+        self.sorted_events
+            .last()
+            .map_or(0, |event| event.tick)
+    }
+
     pub fn get_next_events(&self) -> Option<&[MidiEvent]> {
         let current_tick = self.get_tick();
         // do not return events if tick did not change

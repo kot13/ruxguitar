@@ -4,7 +4,7 @@ use crate::audio::midi_builder::{
 use crate::audio::midi_event::{FIRST_TICK, MidiEventType};
 use crate::audio::midi_player_params::MidiPlayerParams;
 use crate::audio::midi_sequencer::{MidiSequencer, tick_increase};
-use crate::audio::playback_order::first_playback_ticks;
+use crate::audio::playback_order::{first_playback_ticks, measure_loop_tick_range};
 use crate::parser::song_parser::Song;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
@@ -36,6 +36,7 @@ pub struct AudioPlayer {
     beat_notify: Arc<Notify>,
     /// First playback tick per measure, for seeking.
     measure_playback_ticks: Vec<u32>,
+    last_playback_tick: u32,
 }
 
 impl AudioPlayer {
@@ -71,6 +72,7 @@ impl AudioPlayer {
 
         let synthesizer = Arc::new(Mutex::new(synthesizer));
         let sequencer = Arc::new(Mutex::new(MidiSequencer::new(events)));
+        let last_playback_tick = sequencer.lock().unwrap().last_event_tick();
         Ok(Self {
             is_playing: false,
             song,
@@ -82,6 +84,7 @@ impl AudioPlayer {
             current_tick,
             beat_notify,
             measure_playback_ticks,
+            last_playback_tick,
         })
     }
 
@@ -156,6 +159,24 @@ impl AudioPlayer {
     pub fn set_tempo_percentage(&self, new_tempo_percentage: u32) {
         self.player_params
             .set_tempo_percentage(new_tempo_percentage);
+    }
+
+    pub fn set_measure_loop(&self, start_measure: usize, end_measure: usize) {
+        let (start_tick, end_tick) = measure_loop_tick_range(
+            &self.song.measure_headers,
+            &self.measure_playback_ticks,
+            self.last_playback_tick,
+            start_measure,
+            end_measure,
+        );
+        log::info!(
+            "Loop measures {start_measure}..={end_measure} (ticks {start_tick}..{end_tick})"
+        );
+        self.player_params.set_loop_region(start_tick, end_tick);
+    }
+
+    pub fn clear_measure_loop(&self) {
+        self.player_params.clear_loop();
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -379,13 +400,29 @@ fn new_output_stream(
                 count_in_next_click -= ticks;
             } else {
                 sequencer_guard.advance(player_params.adjusted_tempo(), elapsed_secs);
+                if player_params.loop_enabled() {
+                    let tick = sequencer_guard.get_tick();
+                    if tick >= player_params.loop_end_tick() {
+                        sequencer_guard.set_tick(player_params.loop_start_tick());
+                        synthesizer_guard.note_off_all(false);
+                        synthesizer_guard.reset_all_controllers();
+                        player_params.set_finished(false);
+                    }
+                }
             }
             // process midi events for current tick
-            let next_events = sequencer_guard.get_next_events();
+            let mut next_events = sequencer_guard.get_next_events();
             // the sequence is exhausted: wake the UI once to stop the transport
             if next_events.is_none() && !player_params.is_finished() {
-                player_params.set_finished(true);
-                beat_notify.notify_one();
+                if player_params.loop_enabled() {
+                    sequencer_guard.set_tick(player_params.loop_start_tick());
+                    synthesizer_guard.note_off_all(false);
+                    synthesizer_guard.reset_all_controllers();
+                    next_events = sequencer_guard.get_next_events();
+                } else {
+                    player_params.set_finished(true);
+                    beat_notify.notify_one();
+                }
             }
             if let Some(events) = next_events.filter(|_| !counting_in) {
                 let tick = sequencer_guard.get_tick();

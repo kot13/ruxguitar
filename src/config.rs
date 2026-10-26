@@ -9,9 +9,50 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuxError;
 
+/// Last UI and playback state, restored on the next launch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionState {
+    pub last_tab_file: Option<PathBuf>,
+    pub track_index: usize,
+    pub tempo_percentage: u32,
+    pub master_volume: f32,
+    pub measure_index: usize,
+    pub beat_index: usize,
+    pub selection_start: Option<usize>,
+    pub selection_end: Option<usize>,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            last_tab_file: None,
+            track_index: 0,
+            tempo_percentage: 100,
+            master_volume: 1.0,
+            measure_index: 0,
+            beat_index: 0,
+            selection_start: None,
+            selection_end: None,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     tabs_folder: Option<PathBuf>,
+    #[serde(default)]
+    session: SessionState,
+}
+
+impl Config {
+    pub fn session(&self) -> &SessionState {
+        &self.session
+    }
+
+    pub fn set_session(&mut self, session: SessionState) -> Result<(), RuxError> {
+        self.session = session;
+        self.save_config()
+    }
 }
 
 impl Config {
@@ -79,5 +120,18 @@ impl Config {
         let mut file = File::create(config_path)?;
         file.write_all(json.as_bytes())?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_defaults_when_missing_from_json() {
+        let json = r#"{"tabs_folder":null}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.session.tempo_percentage, 100);
+        assert!(config.session.last_tab_file.is_none());
     }
 }

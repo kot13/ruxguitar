@@ -116,6 +116,23 @@ pub fn first_playback_ticks(headers: &[MeasureHeader], order: &[(usize, i64)]) -
         .collect()
 }
 
+/// Playback tick range `[start, end)` for an inclusive measure index range.
+pub fn measure_loop_tick_range(
+    headers: &[MeasureHeader],
+    first_playback_ticks: &[u32],
+    last_playback_tick: u32,
+    start_measure: usize,
+    end_measure: usize,
+) -> (u32, u32) {
+    let start = first_playback_ticks[start_measure];
+    let end = if end_measure + 1 < headers.len() {
+        first_playback_ticks[end_measure + 1]
+    } else {
+        last_playback_tick.saturating_add(1)
+    };
+    (start, end)
+}
+
 /// Bit for the given repetition in an alternative ending bitmask.
 /// Repetitions beyond the 8th never match.
 const fn repetition_bit(repetition: i8) -> u8 {
