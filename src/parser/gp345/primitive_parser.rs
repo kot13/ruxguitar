@@ -1,4 +1,4 @@
-use encoding_rs::WINDOWS_1252;
+use crate::parser::gp345::text_encoding::decode_gp_legacy_string;
 use nom::combinator::{flat_map, map};
 use nom::{IResult, Parser, bytes, number};
 
@@ -31,21 +31,8 @@ pub fn skip(i: &[u8], n: usize) -> &[u8] {
     i.get(n..).unwrap_or(&[])
 }
 
-/// Materialize properly encoded String
 fn make_string(i: &[u8]) -> String {
-    let (cow, encoding_used, had_errors) = WINDOWS_1252.decode(i);
-    if had_errors {
-        log::debug!("Error parsing string with {encoding_used:?}");
-        match std::str::from_utf8(i) {
-            Ok(s) => s.to_string(),
-            Err(e) => {
-                log::debug!("Error UTF-8 string parsing:{e}");
-                String::new()
-            }
-        }
-    } else {
-        cow.to_string()
-    }
+    decode_gp_legacy_string(i)
 }
 
 /// Parse string of length `len`.
