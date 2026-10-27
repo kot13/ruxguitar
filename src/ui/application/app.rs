@@ -21,6 +21,47 @@ use tokio::sync::Notify;
 
 const ICONS_FONT: &[u8] = include_bytes!("../../../resources/icons.ttf");
 
+#[derive(Debug, Clone)]
+enum StartupTabChoice {
+    Finder(PathBuf),
+    Session(PathBuf),
+    None,
+}
+
+async fn resolve_startup_tab(session_path: Option<PathBuf>) -> StartupTabChoice {
+    #[cfg(target_os = "macos")]
+    {
+        // Finder delivers paths after the delegate exists; wait before restoring session.
+        for _ in 0..60 {
+            crate::macos_open::register_open_files_handler();
+            if let Some(path) = crate::macos_open::take_pending_open_files().into_iter().last() {
+                return StartupTabChoice::Finder(path);
+            }
+            if crate::macos_open::open_handlers_installed() {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                if let Some(path) =
+                    crate::macos_open::take_pending_open_files().into_iter().last()
+                {
+                    return StartupTabChoice::Finder(path);
+                }
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        for _ in 0..20 {
+            if let Some(path) = crate::macos_open::take_pending_open_files().into_iter().last() {
+                return StartupTabChoice::Finder(path);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+    if let Some(path) = session_path.filter(|p| p.is_file()) {
+        StartupTabChoice::Session(path)
+    } else {
+        StartupTabChoice::None
+    }
+}
+
 pub struct RuxApplication {
     /// The open song, if any.
     pub(super) song: Option<LoadedSong>,
@@ -39,6 +80,10 @@ pub struct RuxApplication {
     pub(super) selection_drag: SelectionDrag,
     current_tab_path: Option<PathBuf>,
     session_restore: Option<SessionRestore>,
+    queued_open_path: Option<PathBuf>,
+    /// macOS: ignore Finder queue in subscriptions until startup tab choice finishes.
+    #[cfg(target_os = "macos")]
+    macos_startup_resolved: bool,
 }
 
 /// A parsed song, with its tablature and the track it shows.
@@ -99,6 +144,8 @@ impl SessionRestore {
 pub enum Message {
     OpenFileDialog,
     OpenFile(PathBuf),
+    /// Restore the last tab from session (startup only).
+    OpenSessionFile(PathBuf),
     /// File content, parent folder and file name.
     FileOpened(Result<(Vec<u8>, Option<PathBuf>, String, PathBuf), FilePickerError>),
     TrackSelected(TrackSelection),
@@ -128,6 +175,11 @@ pub enum Message {
     MasterVolumeChanged(f32),
     /// The window is closing: save the session, then exit.
     CloseRequested,
+    /// No-op after startup resolution found nothing to open.
+    StartupIdle,
+    /// macOS: poll Finder open-document queue (after startup resolution).
+    #[cfg(target_os = "macos")]
+    MacOpenPoll,
 }
 
 impl RuxApplication {
@@ -153,25 +205,46 @@ impl RuxApplication {
             selection_drag: SelectionDrag::Idle,
             current_tab_path: None,
             session_restore: None,
+            queued_open_path: None,
+            #[cfg(target_os = "macos")]
+            macos_startup_resolved: false,
         }
     }
 
     fn boot(args: &ApplicationArgs) -> (Self, Task<Message>) {
-        let mut app = Self::new(args.sound_font_bank.clone(), args.local_config.clone());
+        #[cfg(target_os = "macos")]
+        crate::macos_open::register_open_files_handler();
 
-        let init_task = if let Some(path) = &args.tab_file_path {
-            Task::done(Message::OpenFile(path.clone()))
-        } else if let Some(path) = app.config.session().last_tab_file.clone() {
-            if path.is_file() {
-                app.session_restore = Some(SessionRestore::OnLoad(app.config.session().clone()));
-                Task::done(Message::OpenFile(path))
-            } else {
-                Task::none()
-            }
+        let app = Self::new(args.sound_font_bank.clone(), args.local_config.clone());
+
+        let init_task = if let Some(path) = args.tab_file_path.clone() {
+            Task::done(Message::OpenFile(path))
         } else {
-            Task::none()
+            let session_path = app.config.session().last_tab_file.clone();
+            Task::perform(resolve_startup_tab(session_path), |choice| match choice {
+                StartupTabChoice::Finder(path) => Message::OpenFile(path),
+                StartupTabChoice::Session(path) => Message::OpenSessionFile(path),
+                StartupTabChoice::None => Message::StartupIdle,
+            })
         };
         (app, init_task)
+    }
+
+    fn start_opening_file(&mut self, path: PathBuf) -> Task<Message> {
+        if self.tab_file_is_loading {
+            self.queued_open_path = Some(path);
+            return Task::none();
+        }
+        self.tab_file_is_loading = true;
+        Task::perform(load_file(path), Message::FileOpened)
+    }
+
+    fn after_file_opened(&mut self, task: Task<Message>) -> Task<Message> {
+        if let Some(path) = self.queued_open_path.take() {
+            Task::batch([task, Task::done(Message::OpenFile(path))])
+        } else {
+            task
+        }
     }
 
     /// Fresh tab defaults when the user opens a GP file (not startup session restore).
@@ -521,15 +594,46 @@ impl RuxApplication {
                     )
                 }
             }
-            Message::OpenFile(path) => {
-                if self.tab_file_is_loading {
-                    Task::none()
-                } else {
-                    self.tab_file_is_loading = true;
-                    Task::perform(load_file(path), Message::FileOpened)
+            Message::OpenSessionFile(path) => {
+                #[cfg(target_os = "macos")]
+                {
+                    self.macos_startup_resolved = true;
                 }
+                self.session_restore =
+                    Some(SessionRestore::OnLoad(self.config.session().clone()));
+                self.start_opening_file(path)
             }
-            Message::FileOpened(result) => self.on_file_opened(result),
+            Message::OpenFile(path) => {
+                #[cfg(target_os = "macos")]
+                {
+                    self.macos_startup_resolved = true;
+                }
+                self.session_restore = None;
+                self.start_opening_file(path)
+            }
+            Message::StartupIdle => {
+                #[cfg(target_os = "macos")]
+                {
+                    self.macos_startup_resolved = true;
+                }
+                Task::none()
+            }
+            #[cfg(target_os = "macos")]
+            Message::MacOpenPoll => {
+                crate::macos_open::register_open_files_handler();
+                if self.macos_startup_resolved
+                    && let Some(path) =
+                        crate::macos_open::take_pending_open_files().into_iter().last()
+                {
+                    self.session_restore = None;
+                    return self.start_opening_file(path);
+                }
+                Task::none()
+            }
+            Message::FileOpened(result) => {
+                let task = self.on_file_opened(result);
+                self.after_file_opened(task)
+            }
             Message::SelectionDragStart(measure_id, beat_id, press_position) => {
                 self.selection_drag = SelectionDrag::press(press_position, beat_id);
                 if let Some(LoadedSong { tablature, .. }) = &mut self.song {

@@ -1,4 +1,7 @@
 /target
+/dist
+/packaging/.icon-build
 .idea
 /test-files/
 /_site
+.DS_Store

@@ -62,6 +62,11 @@ serde_json = "1.0.154"
 roxmltree = "0.21.2"
 zip = { version = "9.2.1", default-features = false, features = ["deflate"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.1"
+objc2-app-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

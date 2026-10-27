@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 mod audio;
 mod config;
+#[cfg(target_os = "macos")]
+mod macos_open;
 mod parser;
 mod ui;
 
@@ -28,7 +30,7 @@ pub fn main_result() -> Result<(), RuxError> {
 
     let mut args = CliArgs::parse();
     let sound_font_file = args.sound_font_file.take();
-    let tab_file_path = args.tab_file_path.take();
+    let tab_file_path = args.tab_file_path.take().or(args.tab_file.take());
 
     if let Some(sound_font_file) = &sound_font_file {
         if !sound_font_file.exists() {
@@ -67,6 +69,9 @@ pub struct CliArgs {
     /// Optional path to tab file to by-pass the file picker.
     #[arg(long)]
     tab_file_path: Option<PathBuf>,
+    /// Tab file from Finder, `open -a Ruxguitar`, or drag onto the app icon.
+    #[arg(value_name = "TAB_FILE", value_hint = clap::ValueHint::FilePath)]
+    tab_file: Option<PathBuf>,
     /// Disable antialiasing.
     #[arg(long, default_value_t = false)]
     no_antialiasing: bool,

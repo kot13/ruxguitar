@@ -82,6 +82,14 @@ impl RuxApplication {
         });
         subscriptions.push(file_dropped);
 
+        #[cfg(target_os = "macos")]
+        {
+            use iced::time;
+            subscriptions.push(
+                time::every(time::Duration::from_millis(100)).map(|_| Message::MacOpenPoll),
+            );
+        }
+
         // closing is handled here so the session is saved before exiting
         subscriptions.push(window::close_requests().map(|_| Message::CloseRequested));
 
