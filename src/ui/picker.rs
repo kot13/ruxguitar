@@ -3,6 +3,7 @@ use std::path::PathBuf;
 /// File extensions supported by the parser; used by both the dialog filter
 /// and the validation of files loaded directly (CLI argument, drag and drop).
 const SUPPORTED_EXTENSIONS: [&str; 5] = ["gp5", "gp4", "gp3", "gpx", "gp"];
+const SOUND_FONT_EXTENSIONS: [&str; 1] = ["sf2"];
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum FilePickerError {
@@ -64,4 +65,26 @@ pub async fn load_file(
         .await
         .map_err(|error| FilePickerError::IoError(error.to_string()))
         .map(|content| (content, parent_folder, file_name, tab_path))
+}
+
+/// Opens a file dialog and returns the path of a SoundFont file.
+pub async fn open_sound_font_dialog() -> Result<PathBuf, FilePickerError> {
+    let picked_file = rfd::AsyncFileDialog::new()
+        .add_filter("SoundFont files", &SOUND_FONT_EXTENSIONS)
+        .set_title("Select a SoundFont file")
+        .pick_file()
+        .await
+        .ok_or(FilePickerError::DialogClosed)?;
+    let path = picked_file.path().to_path_buf();
+    let extension = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .unwrap_or_default();
+    if !SOUND_FONT_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(FilePickerError::IoError(format!(
+            "Unsupported file extension: {extension}"
+        )));
+    }
+    Ok(std::fs::canonicalize(&path).unwrap_or(path))
 }

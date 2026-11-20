@@ -1,7 +1,8 @@
 //! The event sources the application listens to: keyboard, playback ticks,
 //! window events and the end of a selection drag.
 
-use iced::{Subscription, event, keyboard, mouse, stream, window};
+use iced::{Subscription, event, keyboard, mouse, stream, time, window};
+use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use iced::keyboard::key::Named::{ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Escape, F11, Space};
@@ -85,10 +86,18 @@ impl RuxApplication {
 
         #[cfg(target_os = "macos")]
         {
-            use iced::time;
-            subscriptions.push(
-                time::every(time::Duration::from_millis(100)).map(|_| Message::MacOpenPoll),
-            );
+            subscriptions
+                .push(time::every(Duration::from_millis(100)).map(|_| Message::MacOpenPoll));
+        }
+
+        #[cfg(windows)]
+        if !self.uses_native_menu() {
+            subscriptions.push(window::open_events().map(|_| Message::InstallNativeMenu));
+        }
+
+        if self.uses_native_menu() {
+            subscriptions
+                .push(time::every(Duration::from_millis(100)).map(|_| Message::PollNativeMenu));
         }
 
         // closing is handled here so the session is saved before exiting

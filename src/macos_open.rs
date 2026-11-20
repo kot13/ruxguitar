@@ -8,16 +8,15 @@ use std::ffi::CStr;
 use std::mem;
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 static PENDING: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 static METHODS_HOOKED: AtomicBool = AtomicBool::new(false);
 static DID_FINISH_SWIZZLED: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_DID_FINISH_LAUNCHING: AtomicPtr<()> = AtomicPtr::new(ptr::null_mut());
 
-type DidFinishLaunchingFn =
-    extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
+type DidFinishLaunchingFn = extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject);
 
 pub fn take_pending_open_files() -> Vec<PathBuf> {
     PENDING.lock().unwrap().drain(..).collect()
@@ -108,8 +107,7 @@ extern "C-unwind" fn application_did_finish_launching_hook(
     register_open_files_handler();
     let original = ORIGINAL_DID_FINISH_LAUNCHING.load(Ordering::Acquire);
     if !original.is_null() {
-        let original: DidFinishLaunchingFn =
-            unsafe { mem::transmute(original) };
+        let original: DidFinishLaunchingFn = unsafe { mem::transmute(original) };
         original(this, sel, notification);
     }
 }
@@ -170,8 +168,12 @@ pub fn register_open_files_handler() {
     let open_file_imp: Imp = unsafe { mem::transmute(application_open_file as *const ()) };
     let open_urls_imp: Imp = unsafe { mem::transmute(application_open_urls as *const ()) };
 
-    let ok = add_delegate_method(class, sel!(application:openFiles:), open_files_imp, c"v@:@@")
-        && add_delegate_method(class, sel!(application:openFile:), open_file_imp, c"c@:@@")
+    let ok = add_delegate_method(
+        class,
+        sel!(application:openFiles:),
+        open_files_imp,
+        c"v@:@@",
+    ) && add_delegate_method(class, sel!(application:openFile:), open_file_imp, c"c@:@@")
         && add_delegate_method(class, sel!(application:openURLs:), open_urls_imp, c"v@:@@")
         && delegate_has_method(class, sel!(application:openFiles:));
 

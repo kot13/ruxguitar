@@ -6,8 +6,33 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use crate::RuxError;
+
+/// Light/dark appearance, or follow the desktop (where iced supports it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+impl ThemePreference {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+}
+
+impl fmt::Display for ThemePreference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::System => f.write_str("System"),
+            Self::Light => f.write_str("Light"),
+            Self::Dark => f.write_str("Dark"),
+        }
+    }
+}
 
 /// Last UI and playback state, restored on the next launch.
 ///
@@ -46,6 +71,9 @@ pub struct Config {
     tabs_folder: Option<PathBuf>,
     #[serde(default)]
     session: SessionState,
+    #[serde(default)]
+    theme: ThemePreference,
+    sound_font_file: Option<PathBuf>,
 }
 
 impl Config {
@@ -72,6 +100,32 @@ impl Config {
             Ok(())
         } else {
             self.tabs_folder = new_tabs_folder;
+            self.save_config()
+        }
+    }
+
+    pub fn theme_preference(&self) -> ThemePreference {
+        self.theme
+    }
+
+    pub fn set_theme_preference(&mut self, theme: ThemePreference) -> Result<(), RuxError> {
+        if self.theme == theme {
+            Ok(())
+        } else {
+            self.theme = theme;
+            self.save_config()
+        }
+    }
+
+    pub fn sound_font_file(&self) -> Option<&PathBuf> {
+        self.sound_font_file.as_ref()
+    }
+
+    pub fn set_sound_font_file(&mut self, path: Option<PathBuf>) -> Result<(), RuxError> {
+        if self.sound_font_file == path {
+            Ok(())
+        } else {
+            self.sound_font_file = path;
             self.save_config()
         }
     }
@@ -137,6 +191,14 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.session.tempo_percentage, 100);
         assert!(config.session.last_tab_file.is_none());
+    }
+
+    #[test]
+    fn preferences_default_when_missing_from_json() {
+        let json = r#"{"tabs_folder":null}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.theme_preference(), ThemePreference::System);
+        assert!(config.sound_font_file().is_none());
     }
 
     #[test]

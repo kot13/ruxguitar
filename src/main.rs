@@ -1,7 +1,7 @@
 use crate::RuxError::ConfigError;
 use crate::ui::application::RuxApplication;
 use clap::Parser;
-use config::Config;
+use config::{Config, ThemePreference};
 use std::io;
 use std::path::PathBuf;
 
@@ -29,17 +29,30 @@ pub fn main_result() -> Result<(), RuxError> {
         .init();
 
     let mut args = CliArgs::parse();
-    let sound_font_file = args.sound_font_file.take();
+    let local_config = Config::read_config()?;
+    let mut sound_font_file = args
+        .sound_font_file
+        .take()
+        .or_else(|| local_config.sound_font_file().cloned());
     let tab_file_path = args.tab_file_path.take().or(args.tab_file.take());
 
-    if let Some(sound_font_file) = &sound_font_file {
-        if !sound_font_file.exists() {
-            return Err(ConfigError(format!(
-                "Sound font file not found {sound_font_file:?}"
-            )));
+    if let Some(path) = sound_font_file.as_ref() {
+        if path.exists() {
+            log::info!("Starting with custom sound font file {path:?}");
+        } else {
+            log::warn!(
+                "Sound font file not found {}, using built-in",
+                path.display()
+            );
+            sound_font_file = None;
         }
-        log::info!("Starting with custom sound font file {sound_font_file:?}");
     }
+
+    let theme_preference = match args.theme {
+        Some(ThemeChoice::Light) => ThemePreference::Light,
+        Some(ThemeChoice::Dark) => ThemePreference::Dark,
+        None => local_config.theme_preference(),
+    };
 
     if let Some(tab_file_path) = &tab_file_path {
         if !tab_file_path.exists() {
@@ -52,8 +65,8 @@ pub fn main_result() -> Result<(), RuxError> {
         sound_font_bank: sound_font_file,
         tab_file_path,
         no_antialiasing: args.no_antialiasing,
-        theme: args.theme,
-        local_config: Config::read_config()?,
+        theme_preference,
+        local_config,
     };
 
     RuxApplication::start(args)?;
@@ -101,7 +114,7 @@ pub struct ApplicationArgs {
     sound_font_bank: Option<PathBuf>,
     tab_file_path: Option<PathBuf>,
     no_antialiasing: bool,
-    theme: Option<ThemeChoice>,
+    theme_preference: ThemePreference,
     local_config: Config,
 }
 

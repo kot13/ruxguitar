@@ -2,16 +2,18 @@ use iced::widget::operation::scroll_to;
 use iced::widget::{Id, selector};
 use iced::{Point, Size, Task, Theme, window};
 
+use crate::ApplicationArgs;
 use crate::audio::midi_player::AudioPlayer;
 use crate::audio::playback_order::compute_playback_order;
-use crate::config::{Config, SessionState};
+use crate::config::{Config, SessionState, ThemePreference};
 use crate::parser::parse_gp_data;
-use crate::ui::picker::{FilePickerError, load_file, open_file_dialog};
+use crate::ui::native_menu;
+use crate::ui::native_menu::NativeMenuBar;
+use crate::ui::picker::{FilePickerError, load_file, open_file_dialog, open_sound_font_dialog};
 use crate::ui::selection_drag::{DragRelease, SelectionDrag};
 use crate::ui::selections::{TempoSelection, TrackSelection};
 use crate::ui::song_info::SongDisplayInfo;
 use crate::ui::tablature::Tablature;
-use crate::{ApplicationArgs, ThemeChoice};
 use iced::widget::scrollable::AbsoluteOffset;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -34,13 +36,17 @@ async fn resolve_startup_tab(session_path: Option<PathBuf>) -> StartupTabChoice 
         // Finder delivers paths after the delegate exists; wait before restoring session.
         for _ in 0..60 {
             crate::macos_open::register_open_files_handler();
-            if let Some(path) = crate::macos_open::take_pending_open_files().into_iter().last() {
+            if let Some(path) = crate::macos_open::take_pending_open_files()
+                .into_iter()
+                .last()
+            {
                 return StartupTabChoice::Finder(path);
             }
             if crate::macos_open::open_handlers_installed() {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                if let Some(path) =
-                    crate::macos_open::take_pending_open_files().into_iter().last()
+                if let Some(path) = crate::macos_open::take_pending_open_files()
+                    .into_iter()
+                    .last()
                 {
                     return StartupTabChoice::Finder(path);
                 }
@@ -49,7 +55,10 @@ async fn resolve_startup_tab(session_path: Option<PathBuf>) -> StartupTabChoice 
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         for _ in 0..20 {
-            if let Some(path) = crate::macos_open::take_pending_open_files().into_iter().last() {
+            if let Some(path) = crate::macos_open::take_pending_open_files()
+                .into_iter()
+                .last()
+            {
                 return StartupTabChoice::Finder(path);
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -70,7 +79,10 @@ pub struct RuxApplication {
     pub(super) audio_player: Option<AudioPlayer>,
     pub(super) prefs: PlaybackPrefs,
     pub(super) tab_file_is_loading: bool,
-    sound_font_file: Option<PathBuf>,
+    pub(crate) sound_font_file: Option<PathBuf>,
+    pub(crate) theme_preference: ThemePreference,
+    pub(super) settings_open: bool,
+    sound_font_picker_busy: bool,
     /// Latest tick published by the audio callback, with its wake-up signal.
     pub(super) current_tick: Arc<AtomicU32>,
     pub(super) beat_notify: Arc<Notify>,
@@ -86,6 +98,7 @@ pub struct RuxApplication {
     /// macOS: ignore Finder queue in subscriptions until startup tab choice finishes.
     #[cfg(target_os = "macos")]
     macos_startup_resolved: bool,
+    native_menu: Option<NativeMenuBar>,
 }
 
 /// A parsed song, with its tablature and the track it shows.
@@ -189,10 +202,24 @@ pub enum Message {
     /// macOS: poll Finder open-document queue (after startup resolution).
     #[cfg(target_os = "macos")]
     MacOpenPoll,
+    OpenSettings,
+    CloseSettings,
+    ThemePreferenceSelected(ThemePreference),
+    PickSoundFontDialog,
+    SoundFontPicked(Result<PathBuf, FilePickerError>),
+    ClearSoundFont,
+    InstallNativeMenu,
+    PollNativeMenu,
+    #[cfg(windows)]
+    AttachNativeMenu(Result<NativeMenuBar, String>),
 }
 
 impl RuxApplication {
-    fn new(sound_font_file: Option<PathBuf>, config: Config) -> Self {
+    fn new(
+        sound_font_file: Option<PathBuf>,
+        theme_preference: ThemePreference,
+        config: Config,
+    ) -> Self {
         let session = config.session().clone();
         Self {
             song: None,
@@ -206,6 +233,9 @@ impl RuxApplication {
             },
             tab_file_is_loading: false,
             sound_font_file,
+            theme_preference,
+            settings_open: false,
+            sound_font_picker_busy: false,
             current_tick: Arc::new(AtomicU32::new(0)),
             beat_notify: Arc::new(Notify::new()),
             config,
@@ -218,6 +248,7 @@ impl RuxApplication {
             queued_open_path: None,
             #[cfg(target_os = "macos")]
             macos_startup_resolved: false,
+            native_menu: None,
         }
     }
 
@@ -225,7 +256,11 @@ impl RuxApplication {
         #[cfg(target_os = "macos")]
         crate::macos_open::register_open_files_handler();
 
-        let app = Self::new(args.sound_font_bank.clone(), args.local_config.clone());
+        let app = Self::new(
+            args.sound_font_bank.clone(),
+            args.theme_preference,
+            args.local_config.clone(),
+        );
 
         let init_task = if let Some(path) = args.tab_file_path.clone() {
             Task::done(Message::OpenFile(path))
@@ -237,7 +272,8 @@ impl RuxApplication {
                 StartupTabChoice::None => Message::StartupIdle,
             })
         };
-        (app, init_task)
+        let menu_task = Task::done(Message::InstallNativeMenu);
+        (app, Task::batch([init_task, menu_task]))
     }
 
     fn start_opening_file(&mut self, path: PathBuf) -> Task<Message> {
@@ -380,12 +416,11 @@ impl RuxApplication {
 
     pub fn start(args: ApplicationArgs) -> iced::Result {
         let antialiasing = !args.no_antialiasing;
-        let theme = resolve_theme(args.theme);
         iced::application(move || Self::boot(&args), Self::update, Self::view)
             .title(Self::title)
             .subscription(Self::subscription)
             .default_font(iced::Font::MONOSPACE)
-            .theme(move |_state: &Self| theme.clone())
+            .theme(|state: &Self| state.active_theme())
             .font(ICONS_FONT)
             .window_size((1150.0, 768.0))
             .centered()
@@ -611,8 +646,7 @@ impl RuxApplication {
                 {
                     self.macos_startup_resolved = true;
                 }
-                self.session_restore =
-                    Some(SessionRestore::OnLoad(self.config.session().clone()));
+                self.session_restore = Some(SessionRestore::OnLoad(self.config.session().clone()));
                 self.start_opening_file(path)
             }
             Message::OpenFile(path) => {
@@ -634,8 +668,9 @@ impl RuxApplication {
             Message::MacOpenPoll => {
                 crate::macos_open::register_open_files_handler();
                 if self.macos_startup_resolved
-                    && let Some(path) =
-                        crate::macos_open::take_pending_open_files().into_iter().last()
+                    && let Some(path) = crate::macos_open::take_pending_open_files()
+                        .into_iter()
+                        .last()
                 {
                     self.session_restore = None;
                     return self.start_opening_file(path);
@@ -855,20 +890,153 @@ impl RuxApplication {
                 self.error_message = Some(error);
                 Task::none()
             }
+            Message::OpenSettings => {
+                self.settings_open = true;
+                Task::none()
+            }
+            Message::CloseSettings => {
+                self.settings_open = false;
+                Task::none()
+            }
+            Message::ThemePreferenceSelected(theme) => {
+                self.theme_preference = theme;
+                if let Err(err) = self.config.set_theme_preference(theme) {
+                    return Task::done(Message::ReportError(format!(
+                        "Failed to save theme preference: {err}"
+                    )));
+                }
+                Task::none()
+            }
+            Message::PickSoundFontDialog => {
+                if self.sound_font_picker_busy {
+                    Task::none()
+                } else {
+                    self.sound_font_picker_busy = true;
+                    Task::perform(open_sound_font_dialog(), Message::SoundFontPicked)
+                }
+            }
+            Message::SoundFontPicked(result) => {
+                self.sound_font_picker_busy = false;
+                match result {
+                    Ok(path) => self.apply_sound_font(Some(path)),
+                    Err(FilePickerError::DialogClosed) => Task::none(),
+                    Err(err) => Task::done(Message::ReportError(format!(
+                        "Failed to pick sound font: {err}"
+                    ))),
+                }
+            }
+            Message::ClearSoundFont => self.apply_sound_font(None),
+            Message::InstallNativeMenu => self.install_native_menu(),
+            Message::PollNativeMenu => {
+                while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
+                    if native_menu::is_settings_event(&event) {
+                        return Task::done(Message::OpenSettings);
+                    }
+                }
+                Task::none()
+            }
+            #[cfg(windows)]
+            Message::AttachNativeMenu(result) => {
+                match result {
+                    Ok(bar) => self.native_menu = Some(bar),
+                    Err(err) => log::warn!("Native menu: {err}"),
+                }
+                Task::none()
+            }
         }
     }
-}
 
-/// The theme to run with, or `None` to let iced follow the desktop.
-///
-/// An explicit choice always wins. Otherwise iced resolves the desktop
-/// preference - except on Linux, where winit reports none and iced would
-/// fall back to light whatever the desktop looks like; the dark tab stays
-/// the default there.
-fn resolve_theme(choice: Option<ThemeChoice>) -> Option<Theme> {
-    choice
-        .map(Theme::from)
-        .or_else(|| cfg!(target_os = "linux").then_some(Theme::Dark))
+    fn install_native_menu(&mut self) -> Task<Message> {
+        if self.native_menu.is_some() {
+            return Task::none();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            match native_menu::install_app_menu() {
+                Ok(bar) => self.native_menu = Some(bar),
+                Err(err) => log::warn!("Native menu: {err}"),
+            }
+            Task::none()
+        }
+        #[cfg(windows)]
+        {
+            window::latest()
+                .and_then(|id| window::run(id, |handle| native_menu::install_window_menu(handle)))
+                .map(Message::AttachNativeMenu)
+        }
+        #[cfg(not(any(target_os = "macos", windows)))]
+        {
+            Task::none()
+        }
+    }
+
+    pub(super) fn uses_native_menu(&self) -> bool {
+        self.native_menu.is_some()
+    }
+
+    /// The iced theme for the current preference, or `None` to follow the desktop.
+    pub(super) fn active_theme(&self) -> Option<Theme> {
+        match self.theme_preference {
+            ThemePreference::Light => Some(Theme::Light),
+            ThemePreference::Dark => Some(Theme::Dark),
+            ThemePreference::System => cfg!(target_os = "linux").then_some(Theme::Dark),
+        }
+    }
+
+    fn apply_sound_font(&mut self, path: Option<PathBuf>) -> Task<Message> {
+        if let Some(ref path) = path
+            && !path.exists()
+        {
+            return Task::done(Message::ReportError(format!(
+                "Sound font file not found: {}",
+                path.display()
+            )));
+        }
+        let previous = self.sound_font_file.clone();
+        self.sound_font_file = path.clone();
+        if let Some(err) = self.try_rebuild_audio_player() {
+            self.sound_font_file = previous;
+            return Task::done(Message::ReportError(format!(
+                "Failed to load sound font: {err}"
+            )));
+        }
+        if let Err(err) = self.config.set_sound_font_file(path) {
+            return Task::done(Message::ReportError(format!(
+                "Failed to save sound font path: {err}"
+            )));
+        }
+        Task::none()
+    }
+
+    /// Recreate the audio engine when the SoundFont changes.
+    fn try_rebuild_audio_player(&mut self) -> Option<String> {
+        let Some(LoadedSong { tablature, .. }) = &self.song else {
+            return None;
+        };
+        let song_rc = tablature.song.clone();
+        let song_tempo = song_rc.tempo.value;
+        let playback_order = compute_playback_order(&song_rc.measure_headers);
+        let new_player = match AudioPlayer::new(
+            song_rc,
+            song_tempo,
+            self.prefs.tempo.percentage,
+            self.sound_font_file.clone(),
+            self.current_tick.clone(),
+            self.beat_notify.clone(),
+            &playback_order,
+        ) {
+            Ok(player) => player,
+            Err(err) => return Some(err.to_string()),
+        };
+        let previous = self.audio_player.take();
+        self.prefs.apply_to(&new_player);
+        self.sync_measure_loop();
+        if let Some(mut old) = previous {
+            old.stop();
+        }
+        self.audio_player = Some(new_player);
+        None
+    }
 }
 
 #[cfg(test)]

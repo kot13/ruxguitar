@@ -1,9 +1,11 @@
 pub mod application;
 mod icons;
 mod measure;
+mod native_menu;
 mod picker;
 mod selection_drag;
 mod selections;
+mod settings;
 mod song_info;
 mod tablature;
 mod tuning;

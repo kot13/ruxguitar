@@ -2,7 +2,7 @@
 
 use iced::advanced::text::Shaping::Auto;
 use iced::widget::space::horizontal;
-use iced::widget::{Text, column, container, pick_list, row, rule, slider, text};
+use iced::widget::{Text, button, column, container, pick_list, row, rule, slider, text};
 use iced::{Alignment, Border, Element, Length, Theme};
 
 use crate::audio::midi_player::AudioPlayer;
@@ -37,6 +37,7 @@ impl RuxApplication {
                 .into()
         } else {
             column![
+                self.maybe_app_menu(),
                 self.control_bar(),
                 self.with_track_menu(tablature, SECTION_SPACING),
                 rule::horizontal(1),
@@ -47,13 +48,31 @@ impl RuxApplication {
             .into()
         };
 
+        let with_settings = if self.settings_open {
+            modal(base, self.settings_panel(), Message::CloseSettings)
+        } else {
+            base
+        };
+
         // add error modal if any
         if let Some(error_message) = &self.error_message {
             let error_view = text(error_message).size(20);
-            modal(base, error_view, Message::ClearError)
+            modal(with_settings, error_view, Message::ClearError)
         } else {
-            base
+            with_settings
         }
+    }
+
+    /// In-window Settings entry when the native menu is unavailable.
+    fn maybe_app_menu(&self) -> Element<'_, Message> {
+        if self.uses_native_menu() {
+            return row![].into();
+        }
+        let settings = button("Settings")
+            .on_press(Message::OpenSettings)
+            .padding([4, 12])
+            .style(button::text);
+        row![settings].spacing(8).align_y(Alignment::Center).into()
     }
 
     /// The bar above the tablature: open, transport and playback settings.
